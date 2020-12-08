@@ -1044,6 +1044,7 @@ initialize_SSL(PGconn *conn)
 	 * it doesn't really matter.)
 	 */
 	if (!(conn->ssl = SSL_new(SSL_context)) ||
+	    !SSL_set_tlsext_host_name(conn->ssl, conn->connhost[conn->whichhost].host) ||
 		!SSL_set_app_data(conn->ssl, conn) ||
 		!my_SSL_set_fd(conn, conn->sock))
 	{

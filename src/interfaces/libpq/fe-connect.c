@@ -1268,6 +1268,7 @@ connectOptions2(PGconn *conn)
 			&& strcmp(conn->sslmode, "allow") != 0
 			&& strcmp(conn->sslmode, "prefer") != 0
 			&& strcmp(conn->sslmode, "require") != 0
+			&& strcmp(conn->sslmode, "proxy") != 0
 			&& strcmp(conn->sslmode, "verify-ca") != 0
 			&& strcmp(conn->sslmode, "verify-full") != 0)
 		{
@@ -2915,6 +2916,13 @@ keep_going:						/* We will come back to here until there is
 				if (conn->allow_ssl_try && !conn->wait_ssl_try &&
 					!conn->ssl_in_use)
 				{
+					/*
+					* SSL is handled by proxy/load-balancer, no need to send SSLRequest
+					*/
+					if(conn->sslmode[0]=='p'){
+						conn->status = CONNECTION_SSL_STARTUP;
+						return PGRES_POLLING_WRITING;
+					}
 					ProtocolVersion pv;
 
 					/*
@@ -2995,77 +3003,89 @@ keep_going:						/* We will come back to here until there is
 				if (!conn->ssl_in_use)
 				{
 					/*
-					 * We use pqReadData here since it has the logic to
-					 * distinguish no-data-yet from connection closure. Since
-					 * conn->ssl isn't set, a plain recv() will occur.
+					 * Skip SSLRequest package and initialize ssl directly with proxy
 					 */
-					char		SSLok;
-					int			rdresult;
-
-					rdresult = pqReadData(conn);
-					if (rdresult < 0)
-					{
-						/* errorMessage is already filled in */
-						goto error_return;
-					}
-					if (rdresult == 0)
-					{
-						/* caller failed to wait for data */
-						return PGRES_POLLING_READING;
-					}
-					if (pqGetc(&SSLok, conn) < 0)
-					{
-						/* should not happen really */
-						return PGRES_POLLING_READING;
-					}
-					if (SSLok == 'S')
+					if (conn->sslmode[0]=='p')
 					{
 						/* mark byte consumed */
 						conn->inStart = conn->inCursor;
 						/* Set up global SSL state if required */
 						if (pqsecure_initialize(conn) != 0)
 							goto error_return;
-					}
-					else if (SSLok == 'N')
-					{
-						/* mark byte consumed */
-						conn->inStart = conn->inCursor;
-						/* OK to do without SSL? */
-						if (conn->sslmode[0] == 'r' ||	/* "require" */
-							conn->sslmode[0] == 'v')	/* "verify-ca" or
-														 * "verify-full" */
+					} else {
+						/*
+						* We use pqReadData here since it has the logic to
+						* distinguish no-data-yet from connection closure. Since
+						* conn->ssl isn't set, a plain recv() will occur.
+						*/
+						char		SSLok;
+						int			rdresult;
+
+						rdresult = pqReadData(conn);
+						if (rdresult < 0)
 						{
-							/* Require SSL, but server does not want it */
-							appendPQExpBufferStr(&conn->errorMessage,
-												 libpq_gettext("server does not support SSL, but SSL was required\n"));
+							/* errorMessage is already filled in */
 							goto error_return;
 						}
-						/* Otherwise, proceed with normal startup */
-						conn->allow_ssl_try = false;
-						conn->status = CONNECTION_MADE;
-						return PGRES_POLLING_WRITING;
-					}
-					else if (SSLok == 'E')
-					{
-						/*
-						 * Server failure of some sort, such as failure to
-						 * fork a backend process.  We need to process and
-						 * report the error message, which might be formatted
-						 * according to either protocol 2 or protocol 3.
-						 * Rather than duplicate the code for that, we flip
-						 * into AWAITING_RESPONSE state and let the code there
-						 * deal with it.  Note we have *not* consumed the "E"
-						 * byte here.
-						 */
-						conn->status = CONNECTION_AWAITING_RESPONSE;
-						goto keep_going;
-					}
-					else
-					{
-						appendPQExpBuffer(&conn->errorMessage,
-										  libpq_gettext("received invalid response to SSL negotiation: %c\n"),
-										  SSLok);
-						goto error_return;
+						if (rdresult == 0)
+						{
+							/* caller failed to wait for data */
+							return PGRES_POLLING_READING;
+						}
+						if (pqGetc(&SSLok, conn) < 0)
+						{
+							/* should not happen really */
+							return PGRES_POLLING_READING;
+						}
+						if (SSLok == 'S')
+						{
+							/* mark byte consumed */
+							conn->inStart = conn->inCursor;
+							/* Set up global SSL state if required */
+							if (pqsecure_initialize(conn) != 0)
+								goto error_return;
+						}
+						else if (SSLok == 'N')
+						{
+							/* mark byte consumed */
+							conn->inStart = conn->inCursor;
+							/* OK to do without SSL? */
+							if (conn->sslmode[0] == 'r' ||	/* "require" */
+								conn->sslmode[0] == 'v')	/* "verify-ca" or
+															* "verify-full" */
+							{
+								/* Require SSL, but server does not want it */
+								appendPQExpBufferStr(&conn->errorMessage,
+													libpq_gettext("server does not support SSL, but SSL was required\n"));
+								goto error_return;
+							}
+							/* Otherwise, proceed with normal startup */
+							conn->allow_ssl_try = false;
+							conn->status = CONNECTION_MADE;
+							return PGRES_POLLING_WRITING;
+						}
+						else if (SSLok == 'E')
+						{
+							/*
+							* Server failure of some sort, such as failure to
+							* fork a backend process.  We need to process and
+							* report the error message, which might be formatted
+							* according to either protocol 2 or protocol 3.
+							* Rather than duplicate the code for that, we flip
+							* into AWAITING_RESPONSE state and let the code there
+							* deal with it.  Note we have *not* consumed the "E"
+							* byte here.
+							*/
+							conn->status = CONNECTION_AWAITING_RESPONSE;
+							goto keep_going;
+						}
+						else
+						{
+							appendPQExpBuffer(&conn->errorMessage,
+											libpq_gettext("received invalid response to SSL negotiation: %c\n"),
+											SSLok);
+							goto error_return;
+						}
 					}
 				}
 
