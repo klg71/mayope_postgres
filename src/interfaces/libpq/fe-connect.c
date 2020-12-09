@@ -131,6 +131,7 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #define DefaultTargetSessionAttrs	"any"
 #ifdef USE_SSL
 #define DefaultSSLMode "prefer"
+#define DefaultSSLTermination "server"
 #else
 #define DefaultSSLMode	"disable"
 #endif
@@ -292,6 +293,11 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"sslmode", "PGSSLMODE", DefaultSSLMode, NULL,
 		"SSL-Mode", "", 12,		/* sizeof("verify-full") == 12 */
 	offsetof(struct pg_conn, sslmode)},
+
+	{"ssltermination", "PGSSLTERMINATION", DefaultSSLMode, NULL,
+		"SSL-Termination-Mode", "", 6,		/* sizeof("server") == 6 */
+	offsetof(struct pg_conn, ssltermination)},
+
 
 	{"sslcompression", "PGSSLCOMPRESSION", "0", NULL,
 		"SSL-Compression", "", 1,
@@ -1268,7 +1274,6 @@ connectOptions2(PGconn *conn)
 			&& strcmp(conn->sslmode, "allow") != 0
 			&& strcmp(conn->sslmode, "prefer") != 0
 			&& strcmp(conn->sslmode, "require") != 0
-			&& strcmp(conn->sslmode, "proxy") != 0
 			&& strcmp(conn->sslmode, "verify-ca") != 0
 			&& strcmp(conn->sslmode, "verify-full") != 0)
 		{
@@ -1276,6 +1281,16 @@ connectOptions2(PGconn *conn)
 			printfPQExpBuffer(&conn->errorMessage,
 							  libpq_gettext("invalid %s value: \"%s\"\n"),
 							  "sslmode", conn->sslmode);
+			return false;
+		}
+
+		if (strcmp(conn->ssltermination, "server") != 0
+			&& strcmp(conn->sslmode, "proxy") != 0) != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid %s value: \"%s\"\n"),
+							  "ssltermination", conn->ssltermination);
 			return false;
 		}
 
@@ -2917,9 +2932,9 @@ keep_going:						/* We will come back to here until there is
 					!conn->ssl_in_use)
 				{
 					/*
-					* SSL is handled by proxy/load-balancer, no need to send SSLRequest
+					* SSL termination is handled by proxy/load-balancer, no need to send SSLRequest
 					*/
-					if(conn->sslmode[0]=='p'){
+					if(conn->ssltermination[0]=='p'){
 						conn->status = CONNECTION_SSL_STARTUP;
 						return PGRES_POLLING_WRITING;
 					}
@@ -3005,7 +3020,7 @@ keep_going:						/* We will come back to here until there is
 					/*
 					 * Skip SSLRequest package and initialize ssl directly with proxy
 					 */
-					if (conn->sslmode[0]=='p')
+					if (conn->ssltermination[0]=='p')
 					{
 						/* mark byte consumed */
 						conn->inStart = conn->inCursor;
