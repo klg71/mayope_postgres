@@ -1285,7 +1285,7 @@ connectOptions2(PGconn *conn)
 		}
 
 		if (strcmp(conn->ssltermination, "server") != 0
-			&& strcmp(conn->sslmode, "proxy") != 0) != 0)
+			&& strcmp(conn->ssltermination, "proxy") != 0)
 		{
 			conn->status = CONNECTION_BAD;
 			printfPQExpBuffer(&conn->errorMessage,
