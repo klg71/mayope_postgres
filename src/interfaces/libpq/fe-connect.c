@@ -294,7 +294,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"SSL-Mode", "", 12,		/* sizeof("verify-full") == 12 */
 	offsetof(struct pg_conn, sslmode)},
 
-	{"ssltermination", "PGSSLTERMINATION", DefaultSSLMode, NULL,
+	{"ssltermination", "PGSSLTERMINATION", DefaultSSLTermination, NULL,
 		"SSL-Termination-Mode", "", 6,		/* sizeof("server") == 6 */
 	offsetof(struct pg_conn, ssltermination)},
 
@@ -1284,16 +1284,6 @@ connectOptions2(PGconn *conn)
 			return false;
 		}
 
-		if (strcmp(conn->ssltermination, "server") != 0
-			&& strcmp(conn->ssltermination, "proxy") != 0)
-		{
-			conn->status = CONNECTION_BAD;
-			printfPQExpBuffer(&conn->errorMessage,
-							  libpq_gettext("invalid %s value: \"%s\"\n"),
-							  "ssltermination", conn->ssltermination);
-			return false;
-		}
-
 #ifndef USE_SSL
 		switch (conn->sslmode[0])
 		{
@@ -1320,6 +1310,25 @@ connectOptions2(PGconn *conn)
 	{
 		conn->sslmode = strdup(DefaultSSLMode);
 		if (!conn->sslmode)
+			goto oom_error;
+	}
+	if (conn->ssltermination)
+	{
+
+		if (strcmp(conn->ssltermination, "server") != 0
+			&& strcmp(conn->ssltermination, "proxy") != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid %s value: \"%s\"\n"),
+							  "ssltermination", conn->ssltermination);
+			return false;
+		}
+	}
+	else
+	{
+		conn->ssltermination = strdup(DefaultSSLTermination);
+		if (!conn->ssltermination)
 			goto oom_error;
 	}
 
